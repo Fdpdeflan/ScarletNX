@@ -166,6 +166,53 @@ void vk_rec_queue(VkQueue q) {
     if (q == g_vk.gfx) vk_rec_sync();
 }
 
+/* ------------------------------------------------------------ hang markers */
+#define MK_LOG 4096
+static struct {
+    const char* what;
+    u32 a, b;
+} g_mk_log[MK_LOG];
+static VkBuffer g_mk_buf;
+static VmaAllocation g_mk_mem;
+static volatile u32* g_mk_ptr;
+static u32 g_mk_seq;
+
+static void mk(VkCommandBuffer cb, const char* what, u32 a, u32 b) {
+    if (!g_vk.has_marker) return;
+    if (!g_mk_buf) {
+        VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                                  .size = 64,
+                                  .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                  .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+        VmaAllocationCreateInfo aci = {.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                                VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                                       .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST};
+        VmaAllocationInfo info;
+        if (!VK_OK(vmaCreateBuffer(g_vk.vma, &bci, &aci, &g_mk_buf, &g_mk_mem, &info))) {
+            g_vk.has_marker = 0;
+            return;
+        }
+        g_mk_ptr = info.pMappedData;
+        *g_mk_ptr = 0;
+    }
+    u32 n = ++g_mk_seq;
+    g_mk_log[n % MK_LOG].what = what;
+    g_mk_log[n % MK_LOG].a = a;
+    g_mk_log[n % MK_LOG].b = b;
+    vkCmdWriteBufferMarkerAMD(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_mk_buf, 0, n);
+}
+
+void vk_marker_report(void) {
+    static int said;
+    if (!g_vk.has_marker || !g_mk_ptr || said++) return;
+    u32 last = *g_mk_ptr, top = g_mk_seq;
+    WARN("vulkan: hang markers: the GPU reached command %u of the %u recorded (the next one did not finish)\n", last,
+         top);
+    for (u32 n = last > 6 ? last - 6 : 1; n <= last + 6 && n <= top; n++)
+        WARN("vulkan:   command %u%s: %s %u %u\n", n, n == last ? " (last reached)" : n == last + 1 ? " (stuck)" : "",
+             g_mk_log[n % MK_LOG].what, g_mk_log[n % MK_LOG].a, g_mk_log[n % MK_LOG].b);
+}
+
 /* ------------------------------------------------------------ beginning and submitting */
 static void begin_run(const void* p) {
     VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -201,7 +248,10 @@ static void submit_run(const void* p) {
                         .pSignalSemaphoreInfos = x->s};
     vk_wait_foreground();
     VkResult r = vkQueueSubmit2(g_vk.gfx, 1, &si, VK_NULL_HANDLE);
-    if (r == VK_ERROR_DEVICE_LOST) fatal("vulkan: the GPU device was lost (driver reset or crash)");
+    if (r == VK_ERROR_DEVICE_LOST) {
+        vk_marker_report();
+        fatal("vulkan: the GPU device was lost (driver reset or crash)");
+    }
     VK_OK(r);
     /* a timeline of FFmpeg's never reaching its value would hang its decoder for good */
     if (r != VK_SUCCESS && x->ns > 1 && x->s[1].value)
@@ -347,7 +397,9 @@ typedef struct {
 } DrawArgs;
 static void draw_run(const void* p) {
     const DrawArgs* x = p;
-    if (!rec_drop_draw()) vkCmdDraw(x->cb, x->a1, x->a2, x->a3, x->a4);
+    if (rec_drop_draw()) return;
+    vkCmdDraw(x->cb, x->a1, x->a2, x->a3, x->a4);
+    mk(x->cb, "draw vertices, instances", x->a1, x->a2);
 }
 void rec_CmdDraw(VkCommandBuffer cb, u32 vertices, u32 instances, u32 first_vertex, u32 first_instance) {
     if (!rec_on(cb)) {
@@ -366,7 +418,9 @@ typedef struct {
 } DrawIndexedArgs;
 static void draw_indexed_run(const void* p) {
     const DrawIndexedArgs* x = p;
-    if (!rec_drop_draw()) vkCmdDrawIndexed(x->cb, x->a1, x->a2, x->a3, x->a4, x->a5);
+    if (rec_drop_draw()) return;
+    vkCmdDrawIndexed(x->cb, x->a1, x->a2, x->a3, x->a4, x->a5);
+    mk(x->cb, "indexed draw indices, instances", x->a1, x->a2);
 }
 void rec_CmdDrawIndexed(VkCommandBuffer cb, u32 indices, u32 instances, u32 first_index, i32 vertex_offset,
                         u32 first_instance) {
@@ -379,8 +433,38 @@ void rec_CmdDrawIndexed(VkCommandBuffer cb, u32 indices, u32 instances, u32 firs
     rec_commit();
 }
 REC3(CmdBindIndexBuffer, VkBuffer, VkDeviceSize, VkIndexType)
-REC3(CmdDispatch, u32, u32, u32)
-REC0(CmdEndRendering)
+typedef struct {
+    VkCommandBuffer cb;
+    u32 x, y, z;
+} DispatchArgs;
+static void dispatch_run(const void* p) {
+    const DispatchArgs* x = p;
+    vkCmdDispatch(x->cb, x->x, x->y, x->z);
+    mk(x->cb, "dispatch groups x, y", x->x, x->y);
+}
+void rec_CmdDispatch(VkCommandBuffer cb, u32 x, u32 y, u32 z) {
+    if (!rec_on(cb)) {
+        vkCmdDispatch(cb, x, y, z);
+        return;
+    }
+    DispatchArgs* a = rec_push(dispatch_run, sizeof *a);
+    *a = (DispatchArgs){cb, x, y, z};
+    rec_commit();
+}
+static void end_rendering_run(const void* p) {
+    const VkCommandBuffer* cb = p;
+    vkCmdEndRendering(*cb);
+    mk(*cb, "pass ends", 0, 0);
+}
+void rec_CmdEndRendering(VkCommandBuffer cb) {
+    if (!rec_on(cb)) {
+        vkCmdEndRendering(cb);
+        return;
+    }
+    VkCommandBuffer* x = rec_push(end_rendering_run, sizeof *x);
+    *x = cb;
+    rec_commit();
+}
 REC1(CmdSetCullMode, VkCullModeFlags)
 REC1(CmdSetFrontFace, VkFrontFace)
 REC1(CmdSetPrimitiveTopology, VkPrimitiveTopology)
@@ -683,6 +767,7 @@ static void copy_buffer_run(const void* p) {
 static void copy_image_run(const void* p) {
     const XferArgs* x = p;
     vkCmdCopyImage(x->cb, (VkImage)x->h1, x->l1, (VkImage)x->h2, x->l2, x->n, XFER_REGIONS(x));
+    mk(x->cb, "image copy regions, width", x->n, ((const VkImageCopy*)XFER_REGIONS(x))->extent.width);
 }
 static void blit_run(const void* p) {
     const XferArgs* x = p;
@@ -885,6 +970,7 @@ static void rendering_run(const void* p) {
                           .pDepthAttachment = x->depth ? &a[x->n] : NULL,
                           .pStencilAttachment = x->stencil ? &a[x->n + 1] : NULL};
     vkCmdBeginRendering(x->cb, &ri);
+    mk(x->cb, "pass begins, color targets, width", x->n, x->area.extent.width);
 }
 void rec_CmdBeginRendering(VkCommandBuffer cb, const VkRenderingInfo* ri) {
     int chained = ri->pNext || (ri->pDepthAttachment && ri->pDepthAttachment->pNext) ||

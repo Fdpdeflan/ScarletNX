@@ -546,6 +546,23 @@ setting Vulkan validation layer
     words Off|On
     help 1 = the Vulkan validation layer (VK_LAYER_KHRONOS_validation, the Vulkan SDK's) checks every Vulkan call and
     help logs what it finds. It slows the game down a lot, and a missing layer is only a warning
+setting Feedback loops
+    key vk_feedback_loops
+    int 0 1
+    default 1
+    startup
+    words Off|On
+    help 1 = a draw that samples a color target it renders to reads it in place, with
+    help VK_EXT_attachment_feedback_loop_layout where the GPU has it. 0 = it reads a copy of the target, as on a GPU
+    help without the extension, to see whether a driver's feedback loops are what hangs a game
+setting Hang marker
+    key vk_hang_marker
+    int 0 1
+    default 0
+    startup
+    words Off|On
+    help 1 = each draw, copy, dispatch and pass of the frame's commands writes a number the GPU reaches (VK_AMD_buffer_marker,
+    help AMD only), and a lost device logs the commands around the last number reached: the one the GPU hung in
 setting Native ASTC
     key native_astc
     int 0 1

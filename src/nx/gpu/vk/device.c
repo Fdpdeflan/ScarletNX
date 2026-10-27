@@ -272,7 +272,7 @@ static int create_device(void) {
     u32 next = 0;
     int has_shader_clock = 0, has_feedback_dynamic = 0, has_cond = 0, has_provoking = 0, video_exts = 0;
     int has_portability = 0, has_reconvergence = 0;
-    int has_calibrated = 0;
+    int has_calibrated = 0, has_marker_ext = 0;
     if (!g_opt_headless) ext[next++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
     {
         SnxVkExtensions e;
@@ -294,6 +294,7 @@ static int create_device(void) {
         has_budget = snx_vk_extensions_has(&e, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         /* the GPU's clock next to the client's, for the profiler's GPU track (gpuprof.c's calibration) */
         has_calibrated = snx_vk_extensions_has(&e, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+        has_marker_ext = snx_vk_extensions_has(&e, VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
         /* a portability driver's subset must be enabled when it has one (MoltenVK) */
         has_portability = snx_vk_extensions_has(&e, "VK_KHR_portability_subset");
         if (has_portability) ext[next++] = "VK_KHR_portability_subset";
@@ -303,6 +304,13 @@ static int create_device(void) {
         snx_vk_extensions_free(&e);
     }
     if (has_budget) ext[next++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+    if (g_settings.hang_marker) {
+        if (has_marker_ext) {
+            g_vk.has_marker = 1;
+            ext[next++] = VK_AMD_BUFFER_MARKER_EXTENSION_NAME;
+        } else
+            WARN("vulkan: vk_hang_marker was asked for, but the GPU has no VK_AMD_buffer_marker\n");
+    }
     /* the extension only with a host time domain among the calibrateable ones: CLOCK_MONOTONIC_RAW is the clock
        the Tracy client keeps its own time in, so the two domains' pair maps the GPU's timestamps onto it */
     if (has_calibrated) {
@@ -379,7 +387,7 @@ static int create_device(void) {
     g_vk.has_cond_render = has_cond && qcond.conditionalRendering;
     g_vk.has_provoking_last = has_provoking && qprov.provokingVertexLast;
     /* the dynamic state and the barriers within a pass only serve feedback loops */
-    g_vk.has_feedback = g_vk.has_feedback && qloop.attachmentFeedbackLoopLayout;
+    g_vk.has_feedback = g_vk.has_feedback && qloop.attachmentFeedbackLoopLayout && g_settings.feedback_loops;
     g_vk.has_feedback_dynamic =
         g_vk.has_feedback && has_feedback_dynamic && qloop_dyn.attachmentFeedbackLoopDynamicState;
     g_vk.has_local_read = g_vk.has_feedback && g_vk.has_local_read && qlocal.dynamicRenderingLocalRead;

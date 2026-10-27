@@ -100,6 +100,7 @@ typedef struct {
     /* VK_EXT_conditional_rendering: a render enable comparing a samples-passed count not known yet with zero
        predicates its draws on the GPU (gpu/vk/query.c) instead of waiting for the count */
     int has_cond_render;
+    int has_marker; /* VK_AMD_buffer_marker, on with vk_hang_marker */
     /* VK_EXT_provoking_vertex's provokingVertexLast: flat inputs take a primitive's last vertex, as the 3D engine's
        PROVOKING_VERTEX (0x5A1) can ask */
     int has_provoking_last;
@@ -255,6 +256,7 @@ void vk_rec_begin(VkCommandBuffer cb); /* begins cb, the frame's command buffer 
 void vk_rec_submit(VkCommandBuffer cb, const VkSemaphoreSubmitInfo* w, u32 nw, const VkSemaphoreSubmitInfo* s,
                    u32 ns);
 void vk_rec_sync(void);        /* until everything queued is recorded and submitted */
+void vk_marker_report(void);   /* after a lost device: the commands around the last marker the GPU reached */
 void vk_rec_queue(VkQueue q);  /* before submitting to or presenting on q outside the ring (vk_lock) */
 /* presents image idx of sc once wait is signaled, in order after the submissions queued before it (vk_lock). The
    result is this present's without the recording thread, otherwise that of an earlier one which wasn't VK_SUCCESS,
