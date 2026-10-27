@@ -11,6 +11,7 @@
    else has to happen after the queued commands are recorded and submitted waits for the ring to drain
    (vk_rec_sync): a new command buffer from the frame's pool, a device wait. Waits on the graphics timeline need
    none, as a timeline value can be waited for before its submission. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "common/utilities/common.h"
@@ -168,16 +169,46 @@ void vk_rec_queue(VkQueue q) {
 
 /* ------------------------------------------------------------ hang markers */
 #define MK_LOG 4096
+typedef struct {
+    u64 vs, fs;
+    u32 width, height, format;
+    char textures[112];
+} MkDraw;
 static struct {
     const char* what;
-    u32 a, b;
+    u32 a, b, draw;
 } g_mk_log[MK_LOG];
+static MkDraw g_mk_draws[MK_LOG], g_mk_next;
+static u32 g_mk_ndraw;
+
+static u64 g_mk_skip;
+static int g_mk_skip_read;
+static u64 mk_skip(void) {
+    if (!g_mk_skip_read) {
+        g_mk_skip = strtoull(g_settings.skip_fragment_shader, NULL, 16);
+        g_mk_skip_read = 1;
+    }
+    return g_mk_skip;
+}
+int vk_marker_wanted(void) { return g_vk.has_marker || mk_skip(); }
+void vk_marker_note(u64 vs, u64 fs, u32 width, u32 height, u32 format, const char* textures) {
+    g_mk_next = (MkDraw){.vs = vs, .fs = fs, .width = width, .height = height, .format = format};
+    snprintf(g_mk_next.textures, sizeof g_mk_next.textures, "%s", textures);
+}
+static u32 mk_draw_id(void) {
+    if (!vk_marker_wanted()) return 0;
+    u32 id = ++g_mk_ndraw;
+    g_mk_draws[id % MK_LOG] = g_mk_next;
+    return id;
+}
 static VkBuffer g_mk_buf;
 static VmaAllocation g_mk_mem;
 static volatile u32* g_mk_ptr;
 static u32 g_mk_seq;
 
-static void mk(VkCommandBuffer cb, const char* what, u32 a, u32 b) {
+static int mk_skipped(u32 draw) { return draw && mk_skip() && g_mk_draws[draw % MK_LOG].fs == mk_skip(); }
+
+static void mk(VkCommandBuffer cb, const char* what, u32 a, u32 b, u32 draw) {
     if (!g_vk.has_marker) return;
     if (!g_mk_buf) {
         VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -199,6 +230,7 @@ static void mk(VkCommandBuffer cb, const char* what, u32 a, u32 b) {
     g_mk_log[n % MK_LOG].what = what;
     g_mk_log[n % MK_LOG].a = a;
     g_mk_log[n % MK_LOG].b = b;
+    g_mk_log[n % MK_LOG].draw = draw;
     vkCmdWriteBufferMarkerAMD(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_mk_buf, 0, n);
 }
 
@@ -208,9 +240,16 @@ void vk_marker_report(void) {
     u32 last = *g_mk_ptr, top = g_mk_seq;
     WARN("vulkan: hang markers: the GPU reached command %u of the %u recorded (the next one did not finish)\n", last,
          top);
-    for (u32 n = last > 6 ? last - 6 : 1; n <= last + 6 && n <= top; n++)
+    for (u32 n = last > 6 ? last - 6 : 1; n <= last + 6 && n <= top; n++) {
         WARN("vulkan:   command %u%s: %s %u %u\n", n, n == last ? " (last reached)" : n == last + 1 ? " (stuck)" : "",
              g_mk_log[n % MK_LOG].what, g_mk_log[n % MK_LOG].a, g_mk_log[n % MK_LOG].b);
+        if (g_mk_log[n % MK_LOG].draw) {
+            const MkDraw* d = &g_mk_draws[g_mk_log[n % MK_LOG].draw % MK_LOG];
+            WARN("vulkan:     its vertex shader %016llx, fragment shader %016llx, first target %ux%u format %u, "
+                 "textures%s\n",
+                 (unsigned long long)d->vs, (unsigned long long)d->fs, d->width, d->height, d->format, d->textures);
+        }
+    }
 }
 
 /* ------------------------------------------------------------ beginning and submitting */
@@ -394,12 +433,13 @@ static int rec_drop_draw(void) {
 typedef struct {
     VkCommandBuffer cb;
     u32 a1, a2, a3, a4;
+    u32 draw;
 } DrawArgs;
 static void draw_run(const void* p) {
     const DrawArgs* x = p;
-    if (rec_drop_draw()) return;
+    if (rec_drop_draw() || mk_skipped(x->draw)) return;
     vkCmdDraw(x->cb, x->a1, x->a2, x->a3, x->a4);
-    mk(x->cb, "draw vertices, instances", x->a1, x->a2);
+    mk(x->cb, "draw vertices, instances", x->a1, x->a2, x->draw);
 }
 void rec_CmdDraw(VkCommandBuffer cb, u32 vertices, u32 instances, u32 first_vertex, u32 first_instance) {
     if (!rec_on(cb)) {
@@ -407,7 +447,7 @@ void rec_CmdDraw(VkCommandBuffer cb, u32 vertices, u32 instances, u32 first_vert
         return;
     }
     DrawArgs* x = rec_push(draw_run, sizeof *x);
-    *x = (DrawArgs){cb, vertices, instances, first_vertex, first_instance};
+    *x = (DrawArgs){cb, vertices, instances, first_vertex, first_instance, mk_draw_id()};
     rec_commit();
 }
 typedef struct {
@@ -415,12 +455,13 @@ typedef struct {
     u32 a1, a2, a3;
     i32 a4;
     u32 a5;
+    u32 draw;
 } DrawIndexedArgs;
 static void draw_indexed_run(const void* p) {
     const DrawIndexedArgs* x = p;
-    if (rec_drop_draw()) return;
+    if (rec_drop_draw() || mk_skipped(x->draw)) return;
     vkCmdDrawIndexed(x->cb, x->a1, x->a2, x->a3, x->a4, x->a5);
-    mk(x->cb, "indexed draw indices, instances", x->a1, x->a2);
+    mk(x->cb, "indexed draw indices, instances", x->a1, x->a2, x->draw);
 }
 void rec_CmdDrawIndexed(VkCommandBuffer cb, u32 indices, u32 instances, u32 first_index, i32 vertex_offset,
                         u32 first_instance) {
@@ -429,7 +470,7 @@ void rec_CmdDrawIndexed(VkCommandBuffer cb, u32 indices, u32 instances, u32 firs
         return;
     }
     DrawIndexedArgs* x = rec_push(draw_indexed_run, sizeof *x);
-    *x = (DrawIndexedArgs){cb, indices, instances, first_index, vertex_offset, first_instance};
+    *x = (DrawIndexedArgs){cb, indices, instances, first_index, vertex_offset, first_instance, mk_draw_id()};
     rec_commit();
 }
 REC3(CmdBindIndexBuffer, VkBuffer, VkDeviceSize, VkIndexType)
@@ -440,7 +481,7 @@ typedef struct {
 static void dispatch_run(const void* p) {
     const DispatchArgs* x = p;
     vkCmdDispatch(x->cb, x->x, x->y, x->z);
-    mk(x->cb, "dispatch groups x, y", x->x, x->y);
+    mk(x->cb, "dispatch groups x, y", x->x, x->y, 0);
 }
 void rec_CmdDispatch(VkCommandBuffer cb, u32 x, u32 y, u32 z) {
     if (!rec_on(cb)) {
@@ -454,7 +495,7 @@ void rec_CmdDispatch(VkCommandBuffer cb, u32 x, u32 y, u32 z) {
 static void end_rendering_run(const void* p) {
     const VkCommandBuffer* cb = p;
     vkCmdEndRendering(*cb);
-    mk(*cb, "pass ends", 0, 0);
+    mk(*cb, "pass ends", 0, 0, 0);
 }
 void rec_CmdEndRendering(VkCommandBuffer cb) {
     if (!rec_on(cb)) {
@@ -767,7 +808,7 @@ static void copy_buffer_run(const void* p) {
 static void copy_image_run(const void* p) {
     const XferArgs* x = p;
     vkCmdCopyImage(x->cb, (VkImage)x->h1, x->l1, (VkImage)x->h2, x->l2, x->n, XFER_REGIONS(x));
-    mk(x->cb, "image copy regions, width", x->n, ((const VkImageCopy*)XFER_REGIONS(x))->extent.width);
+    mk(x->cb, "image copy regions, width", x->n, ((const VkImageCopy*)XFER_REGIONS(x))->extent.width, 0);
 }
 static void blit_run(const void* p) {
     const XferArgs* x = p;
@@ -970,7 +1011,7 @@ static void rendering_run(const void* p) {
                           .pDepthAttachment = x->depth ? &a[x->n] : NULL,
                           .pStencilAttachment = x->stencil ? &a[x->n + 1] : NULL};
     vkCmdBeginRendering(x->cb, &ri);
-    mk(x->cb, "pass begins, color targets, width", x->n, x->area.extent.width);
+    mk(x->cb, "pass begins, color targets, width", x->n, x->area.extent.width, 0);
 }
 void rec_CmdBeginRendering(VkCommandBuffer cb, const VkRenderingInfo* ri) {
     int chained = ri->pNext || (ri->pDepthAttachment && ri->pDepthAttachment->pNext) ||

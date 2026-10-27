@@ -257,6 +257,9 @@ void vk_rec_submit(VkCommandBuffer cb, const VkSemaphoreSubmitInfo* w, u32 nw, c
                    u32 ns);
 void vk_rec_sync(void);        /* until everything queued is recorded and submitted */
 void vk_marker_report(void);   /* after a lost device: the commands around the last marker the GPU reached */
+/* what the next draw is, for the marker log: its shaders' hashes and its first color target's size and format */
+void vk_marker_note(u64 vs, u64 fs, u32 width, u32 height, u32 format, const char* textures);
+int vk_marker_wanted(void); /* vk_hang_marker or vk_skip_fs is set */
 void vk_rec_queue(VkQueue q);  /* before submitting to or presenting on q outside the ring (vk_lock) */
 /* presents image idx of sc once wait is signaled, in order after the submissions queued before it (vk_lock). The
    result is this present's without the recording thread, otherwise that of an earlier one which wasn't VK_SUCCESS,

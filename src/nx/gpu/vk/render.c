@@ -3153,6 +3153,16 @@ retry:
         rec_CmdBindTransformFeedbackBuffersEXT(cb, 0, xcount, xbuf, xoff, xsize);
         rec_CmdBeginTransformFeedbackEXT(cb, 0, xcount, from, counter_offs);
     }
+    if (vk_marker_wanted()) {
+        char tex[112] = "";
+        size_t len = 0;
+        for (int i = 0; fs && i < (fs->si.ntex > 4 ? 4 : fs->si.ntex) && len < sizeof tex - 32; i++)
+            len += (size_t)snprintf(tex + len, sizeof tex - len, fres[i].have && fres[i].t ? " [%ux%u format %u]" : " [none]",
+                                    fres[i].have && fres[i].t ? fres[i].t->sw : 0, fres[i].have && fres[i].t ? fres[i].t->sh : 0,
+                                    fres[i].have && fres[i].t ? (u32)fres[i].t->f.vk : 0);
+        vk_marker_note(vs ? vs->hash : 0, fs ? fs->hash : 0, n && rt[0] ? rt[0]->sw : 0, n && rt[0] ? rt[0]->sh : 0,
+                       n && rt[0] ? (u32)rt[0]->f.vk : 0, tex);
+    }
     pred_begin(cb, ch->render_pred);
     if (indexed) {
         rec_CmdBindIndexBuffer(cb, ibuf, ioff, itype);
