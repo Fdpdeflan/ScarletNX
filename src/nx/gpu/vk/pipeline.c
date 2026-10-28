@@ -1480,6 +1480,7 @@ static void pf_key(char* out, size_t n, size_t* guest) {
                   (u32)g_vk_preserve_infnan,
                   (u32)g_vk_preserve_infnan64,
                   (u32)g_vk_subgroup_stages,
+                  (u32)g_shader_converge,
                   (u32)g_vk.has_provoking_last,
                   g_vk_stage_sets,
                   g_vk_buffer_image_slots,

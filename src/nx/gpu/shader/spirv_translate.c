@@ -72,6 +72,7 @@ int g_shader_float16 = 1;
 int g_shader_tessellation = 1;
 int g_shader_clock_scopes;
 int g_shader_maximal_reconvergence;
+int g_shader_converge = 1;
 
 /* the Function variable of a register, predicate or flag (z, s, c, o) */
 static u32 var_of(const DirectCtx* c, u32 v) {
@@ -4101,7 +4102,7 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
     /* The flow loop runs one block per iteration, so lanes that took the two sides of a branch reach the join on
        different iterations, and VOTE, SHFL and BAR would see part of the warp. Each iteration runs only the lanes
        at the subgroup's lowest pc, as the hardware reconverges: lanes ahead wait for the others to reach them. */
-    converge = has_flow && can_subgroup && (needs_subgroup || has_barrier || needs_derivatives);
+    converge = has_flow && can_subgroup && g_shader_converge && (needs_subgroup || has_barrier || needs_derivatives);
     /* FTZ per instruction: without the execution mode, or with it where some FADD, FMUL or FFMA keeps subnormals (the
        mode is the whole module's). Never on a device that flushes by itself, which also flushes those that keep them:
        the flush would change no bit */

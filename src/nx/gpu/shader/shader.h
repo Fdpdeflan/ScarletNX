@@ -145,6 +145,8 @@ extern int g_shader_clock_scopes;
 /* VK_KHR_shader_maximal_reconvergence: a structured program's lanes reconverge where its constructs merge, so one
    whose lanes must reconverge (subgroup operations, barriers, derivatives) takes structured control flow too */
 extern int g_shader_maximal_reconvergence;
+/* 0: a program whose lanes must reconverge runs as any other, without the subgroup minimum of the lanes' pcs (vk_converge) */
+extern int g_shader_converge;
 /* in clip_enable: a later stage before rasterization (tessellation or geometry) follows, and the last one applies
    the depth mode and the clip distances */
 #define SNX_SH_NOT_LAST (1u << 31)

@@ -563,6 +563,15 @@ setting Hang marker
     words Off|On
     help 1 = each draw, copy, dispatch and pass of the frame's commands writes a number the GPU reaches (VK_AMD_buffer_marker,
     help AMD only), and a lost device logs the commands around the last number reached: the one the GPU hung in
+setting Reconverge lanes
+    key vk_converge
+    int 0 1
+    default 1
+    startup
+    words Off|On
+    help 1 = a program whose lanes must reconverge (derivatives after a branch, subgroup operations, barriers) runs a
+    help loop that waits for the lowest pc of the subgroup's lanes. 0 = it runs without, to see whether that loop is
+    help what hangs a GPU (a program that needs its lanes together may then draw wrong)
 setting Skip fragment shader
     key vk_skip_fs
     text 32
