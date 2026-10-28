@@ -242,8 +242,8 @@ void kernel_dump_regs(CPU* c) {
         sym_name(c->x[30], ls, sizeof ls);
         WARN("  pc %s  lr %s\n", ps, ls);
         backtrace(0, c->x[30], c->x[29], 1);
-        dump_code(0, "code", c->pc - 0x20, c->pc + 0x20, c->pc);
-        dump_pointees(0, "x", c->x, 31, 4);
+        dump_code(0, "code", c->pc - 0x20, c->pc + 0x1e0, c->pc);
+        dump_pointees(0, "x", c->x, 31, 8);
     }
     dump_rings(0);
 }
